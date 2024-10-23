@@ -3,10 +3,8 @@ import os
 from sqlmodel import create_engine, SQLModel, Session
 
 # DATABASE_URL = os.environ.get("")
-DATABASE_URL = "YOUR-DATABASE-NAME"
-sqlite_url = f"sqlite:///database.db"
-connect_args = {"check_same_thread": False}
-engine = create_engine(sqlite_url, echo=True, connect_args=connect_args)
+DATABASE_URL = "postgresql://postgres:gjkysqgbgtw@localhost:5432/truck_db"
+engine = create_engine(DATABASE_URL, echo=True)
 
 
 def init_db():

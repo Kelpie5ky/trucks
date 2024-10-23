@@ -1,13 +1,20 @@
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, File, UploadFile, Form
 from app.databases.database import get_session
-from sqlalchemy import select
-from sqlmodel import Session
+from sqlmodel import select, Session
 from sqlalchemy.exc import IntegrityError
 from fastapi.exceptions import RequestValidationError
 from sqlalchemy.orm import selectinload
 
 from app.models.truck import *
-from app.models.chassis import Chassis, ChassisCreate
+from app.models.chassis import Chassis, ChassisCreateWithProperties, ChassisDetailed
+from app.models.chassis_property_set import ChassisPropertySet, ChassisPropertySetCreate
+
+from app.utils.relationship_util import create_related_objects
+from app.utils.upload_util import save_images
+
+from app.services.truck_add_service import get_or_create_chassis, create_truck
+from app.services.image_upload_service import upload_truck_images
+from app.services.truck_update_service import update_truck
 
 
 router = APIRouter(
@@ -16,50 +23,63 @@ router = APIRouter(
     responses={404: {"description": "Not found"}},
 )
 
-@router.get('/', response_model=List[Truck])
-async def get_trucks(*, session: Session = Depends(get_session)):
-    trucks = session.exec(select(Truck)).scalars().all()
 
+@router.post('/add', response_model=TruckDetailed)
+async def add_truck(
+        truck_data: TruckCreate,
+        image_ids: List[int] = None,
+        session: Session = Depends(get_session)
+):
+    chassis_id = await get_or_create_chassis(session, truck_data)
+    new_truck = await create_truck(session, truck_data, chassis_id, image_ids)
+    return new_truck
+
+@router.get('/', response_model=List[TruckDetailed])
+async def get_trucks(*, session: Session = Depends(get_session)):
+    trucks = session.exec(
+        select(Truck)
+        .options(
+            selectinload(Truck.chassis).selectinload(Chassis.chassis_property_set)
+        )
+    ).all()
     return trucks
 
-@router.get("/{truck_id}", response_model=Truck)
+@router.get("/{truck_id}", response_model=TruckDetailed)
 def get_truck_by_id(*, session: Session = Depends(get_session), truck_id: int):
-
     truck = session.exec(
         select(Truck)
-        .options(selectinload(Truck.chassis))
+        .options(selectinload(Truck.chassis).selectinload(Chassis.chassis_property_set))
         .where(Truck.id == truck_id)
-    ).first()
+).first()
     if not truck:
         raise HTTPException(status_code=404, detail="Truck not found.")
 
-    return truck
+    return TruckDetailed.from_orm(truck)
 
-@router.post('/add')
-async def add_truck(*, session: Session = Depends(get_session), truck: TruckCreate):
-    if truck.chassis_id:
-        chassis = session.get(Chassis, truck.chassis_id)
-        if not chassis:
-            raise HTTPException(status_code=404, detail="Chassis not found.")
-        chassis_id = truck.chassis_id
-    elif truck.chassis:
-        new_chassis = Chassis.from_orm(truck.chassis)
-        session.add(new_chassis)
-        session.commit()
-        session.refresh(new_chassis)
-        chassis_id = new_chassis.id
-    else:
-        raise HTTPException(status_code=400, detail="Either chassis_id or chassis data must be provided.")
+@router.patch("/update/{truck_id}", response_model=TruckDetailed)
+async def update_truck_by_id(
+    truck_id: int,
+    truck_data: TruckUpdate,
+    session: Session = Depends(get_session)
+):
+    updated_truck = await update_truck(session, truck_id=truck_id, truck_data=truck_data)
+    return updated_truck
 
-    add_truck = Truck(
-        title=truck.title,
-        truck_type=truck.truck_type,
-        chassis_id=chassis_id
-    )
-    session.add(add_truck)
+@router.delete("/delete/{truck_id}")
+async def delete_truck_by_id(*, session: Session = Depends(get_session), truck_id: int):
+    truck = session.get(Truck, truck_id)
+    if not truck:
+        raise HTTPException(status_code=404, detail="Truck not found")
+    session.delete(truck)
     session.commit()
-    session.refresh(add_truck)
-    return add_truck
+    return {"ok": True}
 
-#Edit truck by id
-# @router.patch('/edit/{truck_id}')
+@router.delete("/delete/batch/")
+async def batch_delete_trucks(*, session: Session = Depends(get_session), truck_ids: List[int]):
+    trucks = session.exec(select(Truck).where(Truck.id.in_(truck_ids))).all()
+    if not trucks:
+        raise HTTPException(status_code=404, detail="Trucks not found")
+    for truck in trucks:
+        session.delete(truck)
+    session.commit()
+    return {"ok": True}

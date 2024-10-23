@@ -6,7 +6,7 @@ from sqlmodel import SQLModel
 
 from alembic import context
 
-from app.models import user, truck, chassis
+from app.models import user, truck, chassis, image_set
 # this is the Alembic Config object, which provides
 # access to the values within the .ini file in use.
 config = context.config
